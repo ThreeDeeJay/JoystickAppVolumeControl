@@ -4,3 +4,4 @@
 #define IDC_START      1003
 #define IDC_EXIT       1004
 #define IDC_LABEL      1005
+#define IDI_APPICON    101
