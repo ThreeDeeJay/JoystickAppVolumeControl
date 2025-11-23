@@ -78,5 +78,5 @@ jobs:
 
     - name: Release - latest
       run: |
-        gh release create latest --target ${{CommitHash}} --generate-notes --latest=true --title "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}" 
+        gh release create latest --target ${{env.CommitHash}} --generate-notes --latest=true --title "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}" 
         gh release upload latest --clobber "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
