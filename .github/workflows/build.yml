@@ -3,7 +3,7 @@ name: Build
 
 env:
   Branch: ${{github.ref_name}}
-  Platform: #Any CPU|Win32|x86|x64 - Check .sln file for available ones
+  Platform: x64
   Configuration: Release
   Artifacts: x64/Release/
   Solution: ${{github.event.repository.name}}.sln # .
@@ -28,6 +28,7 @@ jobs:
     - name: Get current date, commit hash and count
       run: |
         echo "CommitDate=$(git show -s --date=format:'%Y-%m-%d' --format=%cd)" >> $env:GITHUB_ENV
+        echo "CommitHash=$(git rev-parse HEAD)" >> $env:GITHUB_ENV
         echo "CommitHashShort=$(git rev-parse --short=7 HEAD)" >> $env:GITHUB_ENV
         echo "CommitCount=$(git rev-list --count HEAD)" >> $env:GITHUB_ENV
 
@@ -71,11 +72,11 @@ jobs:
         files: '${{env.Artifacts}}'
         dest: "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
 
-    - name: GitHub pre-release
-      uses: "marvinpinto/action-automatic-releases@latest"
-      with:
-        repo_token: "${{secrets.GITHUB_TOKEN}}"
-        automatic_release_tag: "latest"
-        prerelease: true
-        title: "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}"
-        files: "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
+    - name: Purge tag - latest
+      run: |
+        gh release delete latest --cleanup-tag --yes || true
+
+    - name: Release - latest
+      run: |
+        gh release create latest --target ${{CommitHash}} --generate-notes --latest=true --title "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}" 
+        gh release upload latest --clobber "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
