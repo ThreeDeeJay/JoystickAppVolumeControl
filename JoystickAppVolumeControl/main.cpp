@@ -27,7 +27,7 @@ std::vector<ProcSessionInfo> g_sessions;
 
 void RefreshSessionList(HWND hwnd = nullptr);
 void RefreshDeviceList();
-BOOL CALLBACK BindDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 bool GetSelectedAxisValue(const DIJOYSTATE& js, int axisIdx, LONG& val) {
     switch(axisIdx) {
@@ -195,7 +195,7 @@ void FillComboSessions(HWND hCombo) {
     SendMessage(hCombo, CB_SETCURSEL, g_selectedSession >= 0 ? g_selectedSession : 0, 0);
 }
 
-BOOL CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HWND hDevCombo, hAxisCombo, hSessCombo;
     switch (msg) {
     case WM_INITDIALOG: {
