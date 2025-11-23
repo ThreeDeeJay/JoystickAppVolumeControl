@@ -1,5 +1,4 @@
 #include "AudioSessionHelper.h"
-#include <atlbase.h>
 #include <psapi.h>
 
 AudioSessionHelper::AudioSessionHelper() {
@@ -29,7 +28,7 @@ bool AudioSessionHelper::EnumerateSessions(std::vector<ProcSessionInfo>& outList
         HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
         wchar_t name[MAX_PATH] = L"";
         if (h) {
-            GetModuleBaseName(h, NULL, name, MAX_PATH);
+            GetModuleBaseNameW(h, NULL, name, MAX_PATH);
             CloseHandle(h);
         }
         if (wcslen(name) == 0)

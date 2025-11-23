@@ -1,9 +1,11 @@
 #pragma once
+#include <windows.h>
 #include <mmdeviceapi.h>
 #include <audiopolicy.h>
 #include <endpointvolume.h>
 #include <vector>
 #include <string>
+#include <atlbase.h> // For CComPtr
 
 struct ProcSessionInfo {
     std::wstring processName;
