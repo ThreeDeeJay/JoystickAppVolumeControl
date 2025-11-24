@@ -84,7 +84,9 @@ DWORD WINAPI PollingThreadProc(LPVOID param) {
                 double t = (axisRaw-ab.axisMin) / double(ab.axisMax-ab.axisMin);
                 t = Clamp(t, 0.0, 1.0);
                 double mapped = ab.volMin + t * (ab.volMax-ab.volMin);
-                float v = Clamp((float)mapped, std::min(ab.volMin,ab.volMax), std::max(ab.volMin,ab.volMax));
+                float minV = (ab.volMin < ab.volMax) ? ab.volMin : ab.volMax;
+                float maxV = (ab.volMin > ab.volMax) ? ab.volMin : ab.volMax;
+                float v = Clamp((float)mapped, minV, maxV);
                 ProcSessionInfo& sess = g_sessions[ab.sessionIdx];
                 AudioSessionHelper::TargetType tgtType = sess.pid == 0xFFFFFFFF ? AudioSessionHelper::TargetType::System : AudioSessionHelper::TargetType::Process;
                 audioHelper.GetSimpleAudioVolume(sess, tgtType);
@@ -92,7 +94,7 @@ DWORD WINAPI PollingThreadProc(LPVOID param) {
                 audioHelper.ReleaseSimpleAudioVolume(sess);
 
                 wchar_t buf[256];
-                swprintf_s(buf, 256, L"[%s:%s|%ld]->%s: V=%.2f [%.2f-%-.2f]",
+                swprintf_s(buf, 256, L"[%s:%s|%ld]->%s: V=%.2f [%.2f-%.2f]",
                     g_devices[ab.deviceIdx].name.c_str(),
                     g_axes[ab.axisIdx].c_str(), axisRaw, g_sessions[ab.sessionIdx].processName.c_str(),
                     v, ab.volMin, ab.volMax);
@@ -123,7 +125,7 @@ void SaveBindingsToFile(const wchar_t* filename) {
     }
     out << L"]}";
     out.close();
-    MessageBox(nullptr,L"Bindings saved.","Save",0);
+    MessageBox(nullptr, L"Bindings saved.", L"Save", 0);
 }
 
 bool LoadBindingsFromFile(const wchar_t* filename) {
@@ -218,6 +220,7 @@ static void SetFloat(HWND hEdit, float val) {
 
 INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HWND hDevCombo, hAxisCombo, hSessCombo, hAxisMin, hAxisMax, hVolMin, hVolMax;
+    AxisBinding* ab = (AxisBinding*)lParam;
     switch (msg) {
     case WM_INITDIALOG: {
         hDevCombo = GetDlgItem(hDlg, IDC_BIND_DEVICE);
@@ -242,10 +245,9 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK) {
-            AxisBinding ab = {};
-            ab.deviceIdx = (int)SendMessage(hDevCombo, CB_GETCURSEL, 0, 0);
-            ab.axisIdx = (int)SendMessage(hAxisCombo, CB_GETCURSEL, 0, 0);
-            ab.sessionIdx = (int)SendMessage(hSessCombo, CB_GETCURSEL, 0, 0);
+            ab->deviceIdx = (int)SendMessage(hDevCombo, CB_GETCURSEL, 0, 0);
+            ab->axisIdx = (int)SendMessage(hAxisCombo, CB_GETCURSEL, 0, 0);
+            ab->sessionIdx = (int)SendMessage(hSessCombo, CB_GETCURSEL, 0, 0);
 
             int axisMin, axisMax; float volMin, volMax;
             if (!ParseInt(hAxisMin, axisMin)) {
@@ -278,10 +280,8 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
                 SetFocus(hVolMax);
                 break;
             }
-            ab.axisMin=axisMin; ab.axisMax=axisMax; ab.volMin=volMin; ab.volMax=volMax;
-            ab.deviceGuid = g_devices.size()>ab.deviceIdx ? g_devices[ab.deviceIdx].guid : GUID_NULL;
-
-            *(AxisBinding*)GetWindowLongPtr(hDlg, GWLP_USERDATA) = ab;
+            ab->axisMin=axisMin; ab->axisMax=axisMax; ab->volMin=volMin; ab->volMax=volMax;
+            ab->deviceGuid = g_devices.size()>ab->deviceIdx ? g_devices[ab->deviceIdx].guid : GUID_NULL;
             EndDialog(hDlg, IDOK);
         } else if (LOWORD(wParam) == IDCANCEL) {
             EndDialog(hDlg, IDCANCEL);
@@ -324,7 +324,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch(LOWORD(wParam)) {
         case IDC_ADD_BINDING: {
                 AxisBinding ab = {};
-                SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)&ab);
                 if (DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_BIND_DIALOG), hwnd, BindDlgProc, (LPARAM)&ab)==IDOK) {
                     g_bindings.push_back(ab);
                     RefreshBindingsList(g_hBindingsList);
