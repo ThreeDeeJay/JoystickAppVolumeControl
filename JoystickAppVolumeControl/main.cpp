@@ -1,8 +1,10 @@
 #include <windows.h>
 #include <commctrl.h>
-#include <stdio.h>
-#include <string>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <vector>
+#include <string>
 #include "JoystickHelper.h"
 #include "AudioSessionHelper.h"
 #include "resource.h"
@@ -10,31 +12,42 @@
 
 #pragma comment(lib, "comctl32.lib")
 
-#define APP_MENU_BIND   2001
+#define MAX_BINDINGS 32
+
+// --- Struct for persisting (and in-memory) a full binding ---
+struct AxisBinding {
+    int deviceIdx;
+    int axisIdx;
+    int axisMin, axisMax;
+    float volMin, volMax;
+    int sessionIdx;
+    GUID deviceGuid;
+};
 
 HINSTANCE g_hInst;
-HWND g_hListBox, g_hStartBtn, g_hJoystickLabel;
-
-int g_selectedSession = -1;
-int g_selectedDeviceIdx = -1;
-int g_selectedAxisIdx = 2; // Default: Z axis
+HWND g_hBindingsList, g_hAddBtn, g_hDeleteBtn, g_hStartBtn, g_hStopBtn, g_hSaveBtn, g_hLoadBtn, g_hJoystickLabel;
 bool g_running = false;
 
-int g_axisMin = -32768, g_axisMax = 32767;
-float g_volMin = 0.0f, g_volMax = 1.0f;
-
-JoystickHelper joystick;
-AudioSessionHelper audioHelper;
 std::vector<DInputDeviceInfo> g_devices;
 std::vector<std::wstring> g_axes = {
     L"X", L"Y", L"Z", L"Rx", L"Ry", L"Rz", L"Slider0", L"Slider1"
 };
 std::vector<ProcSessionInfo> g_sessions;
+std::vector<AxisBinding> g_bindings;
 
-void RefreshSessionList(HWND hwnd = nullptr);
+JoystickHelper joystick;
+AudioSessionHelper audioHelper;
+
+// --- UI/Binding Editing ---
+void RefreshSessionList();
 void RefreshDeviceList();
-INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void RefreshBindingsList(HWND hBindingList);
 
+INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void SaveBindingsToFile(const wchar_t* filename);
+bool LoadBindingsFromFile(const wchar_t* filename);
+
+// --- Axis Value Mapping ---
 bool GetSelectedAxisValue(const DIJOYSTATE& js, int axisIdx, LONG& val) {
     switch(axisIdx) {
     case 0: val = js.lX; break;
@@ -50,150 +63,103 @@ bool GetSelectedAxisValue(const DIJOYSTATE& js, int axisIdx, LONG& val) {
     return true;
 }
 
-// Clamp
 template<typename T> T Clamp(T val, T min, T max) { return (val < min) ? min : (val > max ? max : val); }
 
 DWORD WINAPI PollingThreadProc(LPVOID param) {
-    HWND hwnd = (HWND)param;
-    ProcSessionInfo& sess = g_sessions[g_selectedSession];
-    AudioSessionHelper::TargetType tgtType = sess.pid == 0xFFFFFFFF ? AudioSessionHelper::TargetType::System : AudioSessionHelper::TargetType::Process;
-    audioHelper.GetSimpleAudioVolume(sess, tgtType);
-
     while (g_running) {
-        DIJOYSTATE js = {};
-        if (joystick.GetJoyState(js)) {
+        for (const AxisBinding& ab : g_bindings) {
+            if (ab.deviceIdx < 0 || ab.deviceIdx >= (int)g_devices.size() ||
+                ab.sessionIdx < 0 || ab.sessionIdx >= (int)g_sessions.size())
+                continue;
+
+            // Each binding calls its own DirectInput device instance for simplest polling.
+            JoystickHelper localJoy;
+            if (!localJoy.Init(g_devices[ab.deviceIdx].guid, nullptr))
+                continue;
+            DIJOYSTATE js = {};
+            if (!localJoy.GetJoyState(js)) continue;
+
             LONG axisRaw = 0;
-            if (GetSelectedAxisValue(js, g_selectedAxisIdx, axisRaw)) {
-                // Robust user-mapping:
-                double a_min = double(g_axisMin), a_max = double(g_axisMax);
-                double v_min = double(g_volMin), v_max = double(g_volMax);
-                double input = double(axisRaw);
-                if (a_min == a_max) { a_max = a_min + 1.0; } // avoid division by zero
-
-                double t = (input - a_min) / (a_max - a_min);
-                if (t < 0.0) t = 0.0;
-                if (t > 1.0) t = 1.0;
-
-                double mapped = v_min + t * (v_max - v_min);
-                float v = Clamp((float)mapped, (float)Clamp(v_min, 0.0, 1.0), (float)Clamp(v_max, 0.0, 1.0));
+            if (GetSelectedAxisValue(js, ab.axisIdx, axisRaw)) {
+                double t = (axisRaw-ab.axisMin) / double(ab.axisMax-ab.axisMin);
+                t = Clamp(t, 0.0, 1.0);
+                double mapped = ab.volMin + t * (ab.volMax-ab.volMin);
+                float v = Clamp((float)mapped, std::min(ab.volMin,ab.volMax), std::max(ab.volMin,ab.volMax));
+                ProcSessionInfo& sess = g_sessions[ab.sessionIdx];
+                AudioSessionHelper::TargetType tgtType = sess.pid == 0xFFFFFFFF ? AudioSessionHelper::TargetType::System : AudioSessionHelper::TargetType::Process;
+                audioHelper.GetSimpleAudioVolume(sess, tgtType);
                 audioHelper.SetSessionVolume(v, sess, tgtType);
+                audioHelper.ReleaseSimpleAudioVolume(sess);
 
                 wchar_t buf[256];
-                swprintf_s(buf, 256, L"Dev: %s Axis: %s|%ld\nV=%.2f [%.2f-%.2f], Axis in [%d-%d]",
-                    g_devices[g_selectedDeviceIdx].name.c_str(), g_axes[g_selectedAxisIdx].c_str(), axisRaw,
-                    v, g_volMin, g_volMax, g_axisMin, g_axisMax);
+                swprintf_s(buf, 256, L"[%s:%s|%ld]->%s: V=%.2f [%.2f-%-.2f]",
+                    g_devices[ab.deviceIdx].name.c_str(),
+                    g_axes[ab.axisIdx].c_str(), axisRaw, g_sessions[ab.sessionIdx].processName.c_str(),
+                    v, ab.volMin, ab.volMax);
                 SetWindowText(g_hJoystickLabel, buf);
-                DEBUG_LOG("AxisValue=%ld mapped=%.3f", axisRaw, v);
-            } else {
-                SetWindowText(g_hJoystickLabel, L"Selected axis not available!");
-                DEBUG_LOG("Axis not available. DeviceIdx=%d AxisIdx=%d", g_selectedDeviceIdx, g_selectedAxisIdx);
             }
-        } else {
-            SetWindowText(g_hJoystickLabel, L"Joystick No Data");
-            DEBUG_LOG("Joystick poll failed");
         }
         Sleep(40);
     }
-    audioHelper.ReleaseSimpleAudioVolume(sess);
     return 0;
 }
 
-void RefreshSessionList(HWND hwnd) {
-    SendMessage(g_hListBox, LB_RESETCONTENT, 0, 0);
-    g_sessions.clear();
-    audioHelper.EnumerateSessions(g_sessions, true);
-    for (size_t i = 0; i < g_sessions.size(); ++i) {
-        std::wstring item = g_sessions[i].processName + L" (PID: " +
-            (g_sessions[i].pid == 0xFFFFFFFF ? L"System" : std::to_wstring(g_sessions[i].pid)) + L")";
-        SendMessage(g_hListBox, LB_ADDSTRING, 0, (LPARAM)item.c_str());
+// --- File Save/Load as JSON ---
+void SaveBindingsToFile(const wchar_t* filename) {
+    std::wofstream out(filename);
+    if (!out) { MessageBox(nullptr,L"Could not open for save!",L"Error",MB_ICONERROR); return; }
+    out << L"{\"bindings\":[";
+    for (size_t i=0;i<g_bindings.size();++i) {
+        const AxisBinding& ab = g_bindings[i];
+        out << L"{\"deviceIdx\":" << ab.deviceIdx
+            << L",\"axisIdx\":" << ab.axisIdx
+            << L",\"axisMin\":" << ab.axisMin
+            << L",\"axisMax\":" << ab.axisMax
+            << L",\"volMin\":" << ab.volMin
+            << L",\"volMax\":" << ab.volMax
+            << L",\"sessionIdx\":" << ab.sessionIdx
+            << L"}";
+        if (i+1<g_bindings.size()) out << L",";
+    }
+    out << L"]}";
+    out.close();
+    MessageBox(nullptr,L"Bindings saved.","Save",0);
+}
+
+bool LoadBindingsFromFile(const wchar_t* filename) {
+    std::wifstream in(filename);
+    if (!in) { MessageBox(nullptr,L"Could not open file!",L"Error",MB_ICONERROR); return false; }
+    std::wstring content((std::istreambuf_iterator<wchar_t>(in)),std::istreambuf_iterator<wchar_t>());
+    in.close();
+    size_t pos=0;
+    g_bindings.clear();
+    while ((pos=content.find(L"{\"deviceIdx\":",pos))!=std::wstring::npos) {
+        AxisBinding ab = {};
+        size_t s=pos+12;
+        swscanf(content.c_str()+s,L"%d,\"axisIdx\":%d,\"axisMin\":%d,\"axisMax\":%d,\"volMin\":%f,\"volMax\":%f,\"sessionIdx\":%d",
+                &ab.deviceIdx,&ab.axisIdx,&ab.axisMin,&ab.axisMax,&ab.volMin,&ab.volMax,&ab.sessionIdx);
+        g_bindings.push_back(ab);
+        pos+=20;
+    }
+    return true;
+}
+
+// --- List controls and button helpers ---
+void RefreshBindingsList(HWND hBindingList) {
+    SendMessage(hBindingList, LB_RESETCONTENT, 0, 0);
+    for (auto& ab : g_bindings) {
+        wchar_t buf[256];
+        swprintf(buf,256,L"%s, %s [%d-%d] \x2192 %s [%.2f-%.2f]",
+            g_devices.size() > ab.deviceIdx ? g_devices[ab.deviceIdx].name.c_str() : L"(None)",
+            g_axes.size() > ab.axisIdx ? g_axes[ab.axisIdx].c_str() : L"(Axis)",
+            ab.axisMin, ab.axisMax,
+            g_sessions.size() > ab.sessionIdx ? g_sessions[ab.sessionIdx].processName.c_str() : L"(App)",
+            ab.volMin, ab.volMax);
+        SendMessage(hBindingList, LB_ADDSTRING,0,(LPARAM)buf);
     }
 }
 
-void RefreshDeviceList() {
-    g_devices.clear();
-    JoystickHelper::EnumerateDevices(g_devices);
-    DEBUG_LOG("Found %zu DirectInput devices", g_devices.size());
-}
-
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    static HANDLE hThread = nullptr;
-    switch (msg) {
-    case WM_CREATE: {
-        HMENU hMenubar = CreateMenu();
-        HMENU hApp = CreateMenu();
-        AppendMenu(hApp, MF_STRING, APP_MENU_BIND, L"&Bind...");
-        AppendMenu(hMenubar, MF_POPUP, (UINT_PTR)hApp, L"&Configure");
-        SetMenu(hwnd, hMenubar);
-
-        CreateWindow(TEXT("STATIC"), TEXT("Select an application to control:"),
-            WS_CHILD | WS_VISIBLE, 22, 15, 300, 18, hwnd, nullptr, g_hInst, nullptr);
-        g_hListBox = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTBOX, nullptr,
-            WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL,
-            20, 40, 415, 200, hwnd, (HMENU)1001, g_hInst, nullptr);
-        HWND hRefresh = CreateWindow(TEXT("BUTTON"), TEXT("Refresh"),
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 20, 250, 80, 30, hwnd, (HMENU)1002, g_hInst, nullptr);
-        g_hStartBtn = CreateWindow(TEXT("BUTTON"), TEXT("Start"),
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 120, 250, 80, 30, hwnd, (HMENU)1003, g_hInst, nullptr);
-        HWND hExitBtn = CreateWindow(TEXT("BUTTON"), TEXT("Exit"),
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 220, 250, 80, 30, hwnd, (HMENU)1004, g_hInst, nullptr);
-        g_hJoystickLabel = CreateWindow(TEXT("STATIC"), TEXT("Joystick Axis Value: "),
-            WS_CHILD | WS_VISIBLE, 22, 300, 440, 28, hwnd, nullptr, g_hInst, nullptr);
-
-        RefreshDeviceList();
-        RefreshSessionList(hwnd);
-        break;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wParam) == 1002) {
-            RefreshSessionList(hwnd);
-        } else if (LOWORD(wParam) == 1003) { // Start
-            if (g_selectedDeviceIdx < 0 || g_selectedDeviceIdx >= (int)g_devices.size()) {
-                MessageBox(hwnd, TEXT("Bind a valid joystick device first!"), TEXT("Error"), MB_OK);
-                DEBUG_LOG("Invalid joystick selected: idx=%d", g_selectedDeviceIdx);
-                break;
-            }
-            if (g_selectedAxisIdx < 0 || g_selectedAxisIdx >= (int)g_axes.size()) {
-                MessageBox(hwnd, TEXT("Bind a valid axis first!"), TEXT("Error"), MB_OK);
-                DEBUG_LOG("Invalid axis selected: idx=%d", g_selectedAxisIdx);
-                break;
-            }
-            int sel = (int)SendMessage(g_hListBox, LB_GETCURSEL, 0, 0);
-            if (sel < 0 || sel >= (int)g_sessions.size()) {
-                MessageBox(hwnd, TEXT("Select a session first!"), TEXT("Info"), MB_OK);
-                DEBUG_LOG("No audio session/app selected for binding");
-                break;
-            }
-            g_selectedSession = sel;
-            if (!joystick.Init(g_devices[g_selectedDeviceIdx].guid, hwnd)) {
-                MessageBox(hwnd, TEXT("Failed to initialize joystick!"), TEXT("Error"), MB_OK);
-                DEBUG_LOG("Joystick initialization failed for idx=%d", g_selectedDeviceIdx);
-                break;
-            }
-            g_running = true;
-            EnableWindow(g_hStartBtn, FALSE);
-            hThread = CreateThread(nullptr, 0, PollingThreadProc, hwnd, 0, nullptr);
-            DEBUG_LOG("Started polling thread for device=%d axis=%d session=%d", g_selectedDeviceIdx, g_selectedAxisIdx, g_selectedSession);
-        } else if (LOWORD(wParam) == 1004) {
-            g_running = false;
-            PostMessage(hwnd, WM_CLOSE, 0, 0);
-            DEBUG_LOG("Exit requested.");
-        } else if (LOWORD(wParam) == APP_MENU_BIND) {
-            DialogBox(g_hInst, MAKEINTRESOURCE(IDD_BIND_DIALOG), hwnd, BindDlgProc);
-        }
-        break;
-    case WM_CLOSE:
-        g_running = false;
-        if (hThread) WaitForSingleObject(hThread, 1000);
-        DestroyWindow(hwnd);
-        break;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        break;
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-// Simple combo box helpers
+// --- Standard combo-fill helpers and parsing (from previous impl) ---
 void FillCombo(HWND hCombo, const std::vector<std::wstring>& items) {
     SendMessage(hCombo, CB_RESETCONTENT, 0, 0);
     for (auto& s : items)
@@ -204,7 +170,7 @@ void FillComboDevs(HWND hCombo) {
     SendMessage(hCombo, CB_RESETCONTENT, 0, 0);
     for (auto& d : g_devices)
         SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)d.name.c_str());
-    SendMessage(hCombo, CB_SETCURSEL, g_selectedDeviceIdx >= 0 ? g_selectedDeviceIdx : 0, 0);
+    SendMessage(hCombo, CB_SETCURSEL, 0, 0);
 }
 void FillComboSessions(HWND hCombo) {
     SendMessage(hCombo, CB_RESETCONTENT, 0, 0);
@@ -213,10 +179,18 @@ void FillComboSessions(HWND hCombo) {
             (s.pid == 0xFFFFFFFF ? L"System" : std::to_wstring(s.pid)) + L")";
         SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)item.c_str());
     }
-    SendMessage(hCombo, CB_SETCURSEL, g_selectedSession >= 0 ? g_selectedSession : 0, 0);
+    SendMessage(hCombo, CB_SETCURSEL, 0, 0);
+}
+void RefreshSessionList() {
+    g_sessions.clear();
+    audioHelper.EnumerateSessions(g_sessions, true);
+}
+void RefreshDeviceList() {
+    g_devices.clear();
+    JoystickHelper::EnumerateDevices(g_devices);
 }
 
-// Robust float/int parsing
+// --- Bind Dialog and parsing helpers ---
 static bool ParseInt(HWND hEdit, int& outVal) {
     wchar_t buf[32] = {0};
     GetWindowTextW(hEdit, buf, 31);
@@ -233,7 +207,6 @@ static bool ParseFloat(HWND hEdit, float& outVal) {
     if (endp == buf || *endp != 0) return false;
     outVal = val; return true;
 }
-
 static void SetInt(HWND hEdit, int val) {
     wchar_t buf[32]; wsprintfW(buf, L"%d", val);
     SetWindowTextW(hEdit, buf);
@@ -258,26 +231,23 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
         RefreshDeviceList();
         FillComboDevs(hDevCombo);
         FillCombo(hAxisCombo, g_axes);
-        RefreshSessionList(nullptr);
+        RefreshSessionList();
         FillComboSessions(hSessCombo);
 
-        SendMessage(hDevCombo, CB_SETCURSEL, g_selectedDeviceIdx >= 0 ? g_selectedDeviceIdx : 0, 0);
-        SendMessage(hAxisCombo, CB_SETCURSEL, g_selectedAxisIdx >= 0 ? g_selectedAxisIdx : 2, 0);
-        SendMessage(hSessCombo, CB_SETCURSEL, g_selectedSession >= 0 ? g_selectedSession : 0, 0);
-
-        SetInt(hAxisMin, g_axisMin);
-        SetInt(hAxisMax, g_axisMax);
-        SetFloat(hVolMin, g_volMin);
-        SetFloat(hVolMax, g_volMax);
+        SetInt(hAxisMin, -32768);
+        SetInt(hAxisMax, 32767);
+        SetFloat(hVolMin, 0.0f);
+        SetFloat(hVolMax, 1.0f);
         break;
     }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK) {
-            int deviceIdx = (int)SendMessage(hDevCombo, CB_GETCURSEL, 0, 0);
-            int axisIdx = (int)SendMessage(hAxisCombo, CB_GETCURSEL, 0, 0);
-            int sessionIdx = (int)SendMessage(hSessCombo, CB_GETCURSEL, 0, 0);
-            int axisMin, axisMax; float volMin, volMax;
+            AxisBinding ab = {};
+            ab.deviceIdx = (int)SendMessage(hDevCombo, CB_GETCURSEL, 0, 0);
+            ab.axisIdx = (int)SendMessage(hAxisCombo, CB_GETCURSEL, 0, 0);
+            ab.sessionIdx = (int)SendMessage(hSessCombo, CB_GETCURSEL, 0, 0);
 
+            int axisMin, axisMax; float volMin, volMax;
             if (!ParseInt(hAxisMin, axisMin)) {
                 MessageBox(hDlg, L"Invalid axis min value.", L"Error", MB_ICONERROR);
                 SetFocus(hAxisMin);
@@ -308,14 +278,10 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
                 SetFocus(hVolMax);
                 break;
             }
+            ab.axisMin=axisMin; ab.axisMax=axisMax; ab.volMin=volMin; ab.volMax=volMax;
+            ab.deviceGuid = g_devices.size()>ab.deviceIdx ? g_devices[ab.deviceIdx].guid : GUID_NULL;
 
-            g_selectedDeviceIdx = deviceIdx;
-            g_selectedAxisIdx = axisIdx;
-            g_selectedSession = sessionIdx;
-            g_axisMin = axisMin;
-            g_axisMax = axisMax;
-            g_volMin = volMin;
-            g_volMax = volMax;
+            *(AxisBinding*)GetWindowLongPtr(hDlg, GWLP_USERDATA) = ab;
             EndDialog(hDlg, IDOK);
         } else if (LOWORD(wParam) == IDCANCEL) {
             EndDialog(hDlg, IDCANCEL);
@@ -323,6 +289,84 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
         break;
     }
     return 0;
+}
+
+// --- MAIN WINDOW / UI ---
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static HANDLE hThread = nullptr;
+    switch (msg) {
+    case WM_CREATE: {
+        RefreshDeviceList();
+        RefreshSessionList();
+
+        // List box for all bindings
+        g_hBindingsList = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTBOX, nullptr,
+            WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL,
+            20, 40, 420, 120, hwnd, (HMENU)IDC_BINDINGS_LIST, g_hInst, nullptr);
+        g_hAddBtn = CreateWindow(TEXT("BUTTON"), TEXT("Add Binding"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 20, 170, 100, 28, hwnd, (HMENU)IDC_ADD_BINDING, g_hInst, nullptr);
+        g_hDeleteBtn = CreateWindow(TEXT("BUTTON"), TEXT("Remove Selected"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 130, 170, 120, 28, hwnd, (HMENU)IDC_DELETE_BINDING, g_hInst, nullptr);
+        g_hStartBtn = CreateWindow(TEXT("BUTTON"), TEXT("Start"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 20, 210, 80, 30, hwnd, (HMENU)IDC_START, g_hInst, nullptr);
+        g_hStopBtn = CreateWindow(TEXT("BUTTON"), TEXT("Stop"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 110, 210, 80, 30, hwnd, (HMENU)IDC_EXIT, g_hInst, nullptr);
+        g_hSaveBtn = CreateWindow(TEXT("BUTTON"), TEXT("Save Bindings"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 250, 170, 90, 28, hwnd, (HMENU)IDC_SAVE_BINDINGS, g_hInst, nullptr);
+        g_hLoadBtn = CreateWindow(TEXT("BUTTON"), TEXT("Load Bindings"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 350, 170, 90, 28, hwnd, (HMENU)IDC_LOAD_BINDINGS, g_hInst, nullptr);
+        g_hJoystickLabel = CreateWindow(TEXT("STATIC"), TEXT("Status: Ready"),
+            WS_CHILD | WS_VISIBLE, 20, 260, 420, 24, hwnd, nullptr, g_hInst, nullptr);
+        RefreshBindingsList(g_hBindingsList);
+        break;
+    }
+    case WM_COMMAND:
+        switch(LOWORD(wParam)) {
+        case IDC_ADD_BINDING: {
+                AxisBinding ab = {};
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)&ab);
+                if (DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_BIND_DIALOG), hwnd, BindDlgProc, (LPARAM)&ab)==IDOK) {
+                    g_bindings.push_back(ab);
+                    RefreshBindingsList(g_hBindingsList);
+                }
+            } break;
+        case IDC_DELETE_BINDING: {
+            int idx = (int)SendMessage(g_hBindingsList, LB_GETCURSEL, 0, 0);
+            if (idx >= 0 && idx < (int)g_bindings.size()) {
+                g_bindings.erase(g_bindings.begin()+idx);
+                RefreshBindingsList(g_hBindingsList);
+            }
+            } break;
+        case IDC_START:
+            if (!g_running && !g_bindings.empty()) {
+                g_running = true;
+                hThread = CreateThread(nullptr, 0, PollingThreadProc, hwnd, 0, nullptr);
+                SetWindowText(g_hJoystickLabel, L"Polling...");
+            }
+            break;
+        case IDC_EXIT:
+            g_running = false;
+            if (hThread) WaitForSingleObject(hThread, 1000);
+            SetWindowText(g_hJoystickLabel, L"Stopped.");
+            break;
+        case IDC_SAVE_BINDINGS:
+            SaveBindingsToFile(L"bindings.json");
+            break;
+        case IDC_LOAD_BINDINGS:
+            LoadBindingsFromFile(L"bindings.json");
+            RefreshBindingsList(g_hBindingsList);
+            break;
+        }
+        break;
+    case WM_CLOSE:
+        g_running = false;
+        DestroyWindow(hwnd);
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
@@ -339,7 +383,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindow(wc.lpszClassName, TEXT("Joystick App Volume Control"),
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 480, 420,
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 480, 320,
         nullptr, nullptr, hInstance, nullptr);
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);

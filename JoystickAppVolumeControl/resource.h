@@ -1,19 +1,23 @@
 #pragma once
-#define IDC_LISTBOX      1001
-#define IDC_REFRESH      1002
-#define IDC_START        1003
-#define IDC_EXIT         1004
-#define IDC_LABEL        1005
-#define IDI_APPICON      101
+#define IDC_LISTBOX         1001
+#define IDC_REFRESH         1002
+#define IDC_START           1003
+#define IDC_EXIT            1004
+#define IDC_LABEL           1005
+#define IDI_APPICON         101
 
-#define APP_MENU_BIND    2001
+#define IDD_BIND_DIALOG     3001
+#define IDC_BIND_DEVICE     3002
+#define IDC_BIND_AXIS       3003
+#define IDC_BIND_SESSION    3004
 
-#define IDD_BIND_DIALOG  3001
-#define IDC_BIND_DEVICE  3002
-#define IDC_BIND_AXIS    3003
-#define IDC_BIND_SESSION 3004
+#define IDC_AXIS_MIN        3005
+#define IDC_AXIS_MAX        3006
+#define IDC_VOL_MIN         3007
+#define IDC_VOL_MAX         3008
 
-#define IDC_AXIS_MIN     3005
-#define IDC_AXIS_MAX     3006
-#define IDC_VOL_MIN      3007
-#define IDC_VOL_MAX      3008
+#define IDC_BINDINGS_LIST   4000
+#define IDC_ADD_BINDING     4001
+#define IDC_DELETE_BINDING  4002
+#define IDC_SAVE_BINDINGS   4003
+#define IDC_LOAD_BINDINGS   4004
