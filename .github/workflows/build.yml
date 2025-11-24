@@ -73,6 +73,15 @@ jobs:
         files: '${{env.Artifacts}}'
         dest: "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
 
+    - name: Purge tag - r${{env.CommitCount}}
+      run: |
+        gh release delete r${{env.CommitCount}} --cleanup-tag --yes || true
+        
+    - name: Release - r${{env.CommitCount}}
+      run: |
+        gh release create r${{env.CommitCount}} --target ${{env.CommitHash}} --generate-notes --latest=true --title "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}" 
+        gh release upload r${{env.CommitCount}} --clobber "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
+
     - name: Purge tag - latest
       run: |
         gh release delete latest --cleanup-tag --yes || true
@@ -81,3 +90,4 @@ jobs:
       run: |
         gh release create latest --target ${{env.CommitHash}} --generate-notes --latest=true --title "[${{env.CommitDate}}] ${{github.event.repository.name}} r${{env.CommitCount}}@${{env.CommitHashShort}}" 
         gh release upload latest --clobber "build/${{github.event.repository.name}}_r${{env.CommitCount}}@${{env.CommitHashShort}}.zip"
+
