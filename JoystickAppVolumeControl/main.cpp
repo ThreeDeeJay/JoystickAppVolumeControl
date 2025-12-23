@@ -237,10 +237,10 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
         RefreshSessionList();
         FillComboSessions(hSessCombo);
 
-        SetInt(hAxisMin, -32768);
-        SetInt(hAxisMax, 32767);
+        SetInt(hAxisMin, 0);
+        SetInt(hAxisMax, 65535);
         SetFloat(hVolMin, 0.0f);
-        SetFloat(hVolMax, 1.0f);
+        SetFloat(hVolMax, 0.1f);
         break;
     }
     case WM_COMMAND:
