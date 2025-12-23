@@ -20,8 +20,8 @@ int g_selectedDeviceIdx = -1;
 int g_selectedAxisIdx = 2; // Default: Z axis
 bool g_running = false;
 
-int g_axisMin = -32768, g_axisMax = 32767;
-float g_volMin = 0.0f, g_volMax = 1.0f;
+int g_axisMin = 0, g_axisMax = 65535;
+float g_volMin = 0.0f, g_volMax = 0.1f;
 
 JoystickHelper joystick;
 AudioSessionHelper audioHelper;
