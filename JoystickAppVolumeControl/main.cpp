@@ -21,7 +21,7 @@ int g_selectedAxisIdx = 2; // Default: Z axis
 bool g_running = false;
 
 int g_axisMin = 65535, g_axisMax = 0;
-float g_volMin = 0.0f, g_volMax = 0.1f;
+float g_volMin = 0.0f, g_volMax = 0.05f;
 
 JoystickHelper joystick;
 AudioSessionHelper audioHelper;
