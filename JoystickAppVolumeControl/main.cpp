@@ -278,7 +278,7 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
             int deviceIdx = (int)SendMessage(hDevCombo, CB_GETCURSEL, 0, 0);
             int axisIdx = (int)SendMessage(hAxisCombo, CB_GETCURSEL, 0, 0);
             int sessionIdx = (int)SendMessage(hSessCombo, CB_GETCURSEL, 0, 0);
-            int axisMin, axisMax; float volMin, volMax;
+            int axisMin, axisMax; int volMin, volMax;
 
             if (!ParseInt(hAxisMin, axisMin)) {
                 MessageBox(hDlg, L"Invalid axis min value.", L"Error", MB_ICONERROR);
