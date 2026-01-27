@@ -65,25 +65,27 @@ DWORD WINAPI PollingThreadProc(LPVOID param) {
             LONG axisRaw = 0;
             if (GetSelectedAxisValue(js, g_selectedAxisIdx, axisRaw)) {
                 // Robust user-mapping:
-                double a_min = double(g_axisMin), a_max = double(g_axisMax);
-                double v_min = double(g_volMin), v_max = double(g_volMax);
-                double input = double(axisRaw);
+                double a_min = static_cast<double>(g_axisMin), a_max = static_cast<double>(g_axisMax);
+                double v_min = static_cast<double>(g_volMin), v_max = static_cast<double>(g_volMax);
+                double input = static_cast<double>(axisRaw);
                 if (a_min == a_max) { a_max = a_min + 1.0; } // avoid division by zero
 
+                // Normalize the axis input and map it to volume percentages
                 double t = (input - a_min) / (a_max - a_min);
-                if (t < 0.0) t = 0.0;
-                if (t > 1.0) t = 1.0;
+                t = Clamp(t, 0.0, 1.0); // Clamping
 
-                double mapped = v_min + t * (v_max - v_min);
-                float v = Clamp((float)mapped, (float)Clamp(v_min, 0.0, 1.0), (float)Clamp(v_max, 0.0, 1.0));
+                // Map normalized value `t` to volume percentage range [v_min, v_max]
+                int mappedVolume = static_cast<int>(v_min + t * (v_max - v_min));
+                float v = Clamp(mappedVolume / 100.0f, 0.0f, 1.0f); // Scale to 0.0–1.0 for setting session volume
                 audioHelper.SetSessionVolume(v, sess, tgtType);
 
+                // Update display to show percentage as an integer
                 wchar_t buf[256];
-                swprintf_s(buf, 256, L"Dev: %s Axis: %s|%ld\nV=%.2f [%.2f-%.2f], Axis in [%d-%d]",
-                    g_devices[g_selectedDeviceIdx].name.c_str(), g_axes[g_selectedAxisIdx].c_str(), axisRaw,
-                    v, g_volMin, g_volMax, g_axisMin, g_axisMax);
+                swprintf_s(buf, 256, L"Dev: %s Axis: %s|%ld\nV=%d%% [%d%%-%d%%], Axis in [%d-%d]",
+                    g_devices[g_selectedDeviceIdx].name.c_str(), g_axes[g_selectedAxisIdx].c_str(), 
+                    axisRaw, mappedVolume, g_volMin, g_volMax, g_axisMin, g_axisMax);
                 SetWindowText(g_hJoystickLabel, buf);
-                DEBUG_LOG("AxisValue=%ld mapped=%.3f", axisRaw, v);
+                DEBUG_LOG("AxisValue=%ld mapped=%d%%", axisRaw, mappedVolume);
             } else {
                 SetWindowText(g_hJoystickLabel, L"Selected axis not available!");
                 DEBUG_LOG("Axis not available. DeviceIdx=%d AxisIdx=%d", g_selectedDeviceIdx, g_selectedAxisIdx);
