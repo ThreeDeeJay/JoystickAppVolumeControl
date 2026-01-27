@@ -269,8 +269,8 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
 
         SetInt(hAxisMin, g_axisMin);
         SetInt(hAxisMax, g_axisMax);
-        SetFloat(hVolMin, g_volMin);
-        SetFloat(hVolMax, g_volMax);
+        SetInt(hVolMin, g_volMin);
+        SetInt(hVolMax, g_volMax);
         break;
     }
     case WM_COMMAND:
@@ -295,12 +295,12 @@ INT_PTR CALLBACK BindDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) 
                 SetFocus(hAxisMax);
                 break;
             }
-            if (!ParseFloat(hVolMin, volMin)) {
+            if (!ParseInt(hVolMin, volMin)) {
                 MessageBox(hDlg, L"Invalid volume min value.", L"Error", MB_ICONERROR);
                 SetFocus(hVolMin);
                 break;
             }
-            if (!ParseFloat(hVolMax, volMax)) {
+            if (!ParseInt(hVolMax, volMax)) {
                 MessageBox(hDlg, L"Invalid volume max value.", L"Error", MB_ICONERROR);
                 SetFocus(hVolMax);
                 break;
